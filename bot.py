@@ -1,46 +1,44 @@
-
-import os
-import time
 import requests
 import pandas as pd
 
-BASE_URL = "https://demo-fapi.binance.com"
-SYMBOL = "ETHUSDT"
+BASE_URL = "https://www.okx.com"
+SYMBOL = "ETH-USDT"
 INTERVAL = "5m"
 ATR_PERIOD = 22
 ATR_MULTIPLIER = 3.0
 
 
 def get_candles():
-    url = BASE_URL + "/fapi/v1/klines"
+    url = BASE_URL + "/api/v5/market/candles"
 
     params = {
-        "symbol": SYMBOL,
-        "interval": INTERVAL,
-        "limit": 300
+        "instId": SYMBOL,
+        "bar": INTERVAL,
+        "limit": "300"
     }
 
     response = requests.get(url, params=params, timeout=20)
     response.raise_for_status()
 
-    df = pd.DataFrame(response.json(), columns=[
-        "open_time", "open", "high", "low", "close",
-        "volume", "close_time", "quote_volume",
-        "trades", "taker_buy_base", "taker_buy_quote", "ignore"
+    result = response.json()
+
+    if result["code"] != "0":
+        raise Exception(result["msg"])
+
+    df = pd.DataFrame(result["data"], columns=[
+        "time", "open", "high", "low", "close",
+        "volume", "vol_ccy", "vol_quote", "confirm"
     ])
 
     for col in ["open", "high", "low", "close"]:
         df[col] = df[col].astype(float)
 
     df["time"] = pd.to_datetime(
-        df["open_time"], unit="ms"
+        df["time"].astype("int64"), unit="ms"
     )
 
-    # Son mum henüz kapanmadıysa çıkar
-    now_ms = int(time.time() * 1000)
-    df = df[df["close_time"] < now_ms].copy()
-
-    return df.sort_values("open_time").reset_index(drop=True)
+    df = df[df["confirm"] == "1"].copy()
+    return df.sort_values("time").reset_index(drop=True)
 
 
 def calculate_ce(df):
@@ -55,19 +53,14 @@ def calculate_ce(df):
     ], axis=1).max(axis=1)
 
     atr = pd.Series(float("nan"), index=df.index)
+    atr.iloc[ATR_PERIOD] = tr.iloc[1:ATR_PERIOD + 1].mean()
 
-    if len(df) <= ATR_PERIOD:
-        raise Exception("Yeterli mum yok")
-
-    atr.iloc[ATR_PERIOD - 1] = tr.iloc[:ATR_PERIOD].mean()
-
-    for i in range(ATR_PERIOD, len(df)):
+    for i in range(ATR_PERIOD + 1, len(df)):
         atr.iloc[i] = (
-            atr.iloc[i - 1] * (ATR_PERIOD - 1)
-            + tr.iloc[i]
+            atr.iloc[i - 1] * (ATR_PERIOD - 1) + tr.iloc[i]
         ) / ATR_PERIOD
 
-    atr = atr * ATR_MULTIPLIER
+    atr *= ATR_MULTIPLIER
 
     highest = df["close"].rolling(ATR_PERIOD).max()
     lowest = df["close"].rolling(ATR_PERIOD).min()
@@ -80,16 +73,16 @@ def calculate_ce(df):
     direction = [1] * len(df)
 
     for i in range(len(df)):
-        current_long = raw_long.iloc[i]
-        current_short = raw_short.iloc[i]
-
         if i == 0:
-            long_stop[i] = current_long
-            short_stop[i] = current_short
+            long_stop[i] = raw_long.iloc[i]
+            short_stop[i] = raw_short.iloc[i]
             continue
 
         prev_long = long_stop[i - 1]
         prev_short = short_stop[i - 1]
+
+        current_long = raw_long.iloc[i]
+        current_short = raw_short.iloc[i]
 
         if pd.notna(prev_long) and df["close"].iloc[i - 1] > prev_long:
             if pd.notna(current_long):
@@ -110,13 +103,11 @@ def calculate_ce(df):
             direction[i] = direction[i - 1]
 
     df["direction"] = direction
-
     previous = df["direction"].shift(1)
 
     df["buy_signal"] = (
         (df["direction"] == 1) & (previous == -1)
     )
-
     df["sell_signal"] = (
         (df["direction"] == -1) & (previous == 1)
     )
@@ -126,7 +117,7 @@ def calculate_ce(df):
 
 def main():
     print("================================")
-    print(" BINANCE DEMO - CHANDELIER EXIT")
+    print(" OKX DATA - CHANDELIER EXIT BOT")
     print("================================")
 
     df = get_candles()
@@ -151,7 +142,7 @@ def main():
 
     print("--------------------------------")
     print("TEST TAMAMLANDI")
-    print("EMIR GONDERILMEDI")
+    print("BINANCE EMRI GONDERILMEDI")
 
 
 if __name__ == "__main__":
