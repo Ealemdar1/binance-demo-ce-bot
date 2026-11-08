@@ -1,4 +1,3 @@
-
 name: Binance Demo CE Bot
 
 on:
@@ -9,7 +8,7 @@ on:
 jobs:
   run-bot:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 5
 
     steps:
       - name: Kodlari indir
@@ -23,5 +22,8 @@ jobs:
       - name: Kutuphaneleri yukle
         run: pip install -r requirements.txt
 
-      - name: Botu calistir
+      - name: Demo API baglanti testi
+        env:
+          BINANCE_API_KEY: ${{ secrets.BINANCE_API_KEY }}
+          BINANCE_API_SECRET: ${{ secrets.BINANCE_API_SECRET }}
         run: python bot.py
