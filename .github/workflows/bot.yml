@@ -1,37 +1,40 @@
-
-name: OKX Chandelier Signal Bot
+name: OKX Sinyal Botu
 
 on:
-  workflow_dispatch:
   schedule:
-    - cron: "2-59/5 * * * *"
-
-permissions:
-  contents: write
-
-concurrency:
-  group: okx-chandelier-bot
-  cancel-in-progress: false
+    - cron: '*/5 * * * *'
+  workflow_dispatch:
 
 jobs:
   run-bot:
     runs-on: ubuntu-latest
-    timeout-minutes: 5
-
     steps:
-      - name: Kodlari indir
-        uses: actions/checkout@v7
+      - name: Checkout Repository
+        uses: actions/checkout@v4
 
-      - name: Python kur
-        uses: actions/setup-python@v7
+      - name: Set up Python
+        uses: actions/setup-python@v5
         with:
-          python-version: "3.11"
+          python-version: '3.10'
 
-      - name: Kutuphaneleri yukle
-        run: pip install -r requirements.txt
+      - name: Install Dependencies
+        run: |
+          pip install --upgrade pip
+          pip install requests pandas numpy
 
-      - name: OKX Telegram sinyal botu
+      - name: Telegram Baglanti Testi ve Botu Calistir
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-        run: python bot.py
+        run: |
+          python -c "
+          import os, requests
+          t = os.environ['TELEGRAM_BOT_TOKEN']
+          c = os.environ['TELEGRAM_CHAT_ID']
+          
+          # Bağlantı testi mesajı
+          test_url = f'https://api.telegram.org/bot{t}/sendMessage'
+          r = requests.post(test_url, json={'chat_id': c, 'text': 'OKX bot Telegram baglantisi basarili!'}, timeout=20)
+          print('Test Yaniti:', r.text)
+          r.raise_for_status()
+          "
