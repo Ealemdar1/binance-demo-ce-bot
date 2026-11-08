@@ -1,4 +1,5 @@
-name: Binance Demo CE Bot
+
+name: OKX Chandelier Signal Bot
 
 on:
   workflow_dispatch:
@@ -22,8 +23,5 @@ jobs:
       - name: Kutuphaneleri yukle
         run: pip install -r requirements.txt
 
-      - name: Demo API baglanti testi
-        env:
-          BINANCE_API_KEY: ${{ secrets.BINANCE_API_KEY }}
-          BINANCE_API_SECRET: ${{ secrets.BINANCE_API_SECRET }}
+      - name: OKX sinyal botu
         run: python bot.py
