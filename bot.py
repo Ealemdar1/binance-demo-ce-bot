@@ -1,23 +1,12 @@
 
-import os
-import time
 import requests
 import pandas as pd
 
-# ==============================
-# BINANCE FUTURES DEMO - CE BOT
-# ==============================
-
 BASE_URL = "https://demo-fapi.binance.com"
-
 SYMBOL = "ETHUSDT"
 INTERVAL = "5m"
-
 ATR_PERIOD = 22
 ATR_MULTIPLIER = 3.0
-USE_CLOSE_EXTREMUMS = True
-
-CHECK_INTERVAL = 10
 CANDLE_LIMIT = 500
 
 def get_candles():
@@ -28,105 +17,90 @@ def get_candles():
         "limit": CANDLE_LIMIT
     }
 
-    response = requests.get(url, params=params, timeout=15)
+    response = requests.get(url, params=params, timeout=20)
     response.raise_for_status()
 
-    data = response.json()
-
-    df = pd.DataFrame(data, columns=[
+    columns = [
         "open_time", "open", "high", "low", "close",
         "volume", "close_time", "quote_volume",
         "trades", "taker_buy_base", "taker_buy_quote", "ignore"
-    ])
+    ]
+
+    df = pd.DataFrame(response.json(), columns=columns)
 
     for col in ["open", "high", "low", "close"]:
         df[col] = df[col].astype(float)
 
     df["open_time"] = pd.to_datetime(df["open_time"], unit="ms")
-
     return df
 
 
 def calculate_ce(df):
     df = df.copy()
 
-    previous_close = df["close"].shift(1)
+    prev_close = df["close"].shift(1)
 
     tr = pd.concat([
         df["high"] - df["low"],
-        (df["high"] - previous_close).abs(),
-        (df["low"] - previous_close).abs()
+        (df["high"] - prev_close).abs(),
+        (df["low"] - prev_close).abs()
     ], axis=1).max(axis=1)
 
-    # Pine Script ta.atr() = Wilder RMA
-    atr = tr.ewm(
-        alpha=1 / ATR_PERIOD,
-        adjust=False,
-        min_periods=ATR_PERIOD
-    ).mean()
+    # Wilder ATR (Pine Script ta.atr)
+    atr = pd.Series(float("nan"), index=df.index)
 
-    if len(df) > ATR_PERIOD:
-        first_valid = tr.first_valid_index()
-        if first_valid is not None:
-            seed_index = first_valid + ATR_PERIOD - 1
-            if seed_index < len(df):
-                atr.iloc[seed_index] = tr.iloc[
-                    first_valid:seed_index + 1
-                ].mean()
-                for i in range(seed_index + 1, len(df)):
-                    atr.iloc[i] = (
-                        atr.iloc[i - 1] * (ATR_PERIOD - 1)
-                        + tr.iloc[i]
-                    ) / ATR_PERIOD
+    if len(df) <= ATR_PERIOD:
+        raise ValueError("Yetersiz mum verisi")
 
-    df["atr"] = atr * ATR_MULTIPLIER
+    seed = tr.iloc[1:ATR_PERIOD + 1].mean()
+    atr.iloc[ATR_PERIOD] = seed
 
-    if USE_CLOSE_EXTREMUMS:
-        highest = df["close"].rolling(ATR_PERIOD).max()
-        lowest = df["close"].rolling(ATR_PERIOD).min()
-    else:
-        highest = df["high"].rolling(ATR_PERIOD).max()
-        lowest = df["low"].rolling(ATR_PERIOD).min()
+    for i in range(ATR_PERIOD + 1, len(df)):
+        atr.iloc[i] = (
+            atr.iloc[i - 1] * (ATR_PERIOD - 1) + tr.iloc[i]
+        ) / ATR_PERIOD
 
-    long_stop = highest - df["atr"]
-    short_stop = lowest + df["atr"]
+    atr = atr * ATR_MULTIPLIER
 
-    long_values = [float("nan")] * len(df)
-    short_values = [float("nan")] * len(df)
-    directions = [1] * len(df)
+    highest = df["close"].rolling(ATR_PERIOD).max()
+    lowest = df["close"].rolling(ATR_PERIOD).min()
+
+    raw_long = highest - atr
+    raw_short = lowest + atr
+
+    long_stop = [float("nan")] * len(df)
+    short_stop = [float("nan")] * len(df)
+    direction = [1] * len(df)
 
     for i in range(len(df)):
         if i == 0:
-            long_values[i] = long_stop.iloc[i]
-            short_values[i] = short_stop.iloc[i]
+            long_stop[i] = raw_long.iloc[i]
+            short_stop[i] = raw_short.iloc[i]
             continue
 
-        prev_long = long_values[i - 1]
-        prev_short = short_values[i - 1]
+        prev_long = long_stop[i - 1]
+        prev_short = short_stop[i - 1]
 
-        current_long = long_stop.iloc[i]
-        current_short = short_stop.iloc[i]
+        current_long = raw_long.iloc[i]
+        current_short = raw_short.iloc[i]
 
-        if pd.notna(prev_long):
-            if df["close"].iloc[i - 1] > prev_long:
-                current_long = max(current_long, prev_long)
+        if pd.notna(prev_long) and df["close"].iloc[i - 1] > prev_long:
+            current_long = max(current_long, prev_long)
 
-        if pd.notna(prev_short):
-            if df["close"].iloc[i - 1] < prev_short:
-                current_short = min(current_short, prev_short)
+        if pd.notna(prev_short) and df["close"].iloc[i - 1] < prev_short:
+            current_short = min(current_short, prev_short)
 
-        long_values[i] = current_long
-        short_values[i] = current_short
+        long_stop[i] = current_long
+        short_stop[i] = current_short
 
         if pd.notna(prev_short) and df["close"].iloc[i] > prev_short:
-            directions[i] = 1
+            direction[i] = 1
         elif pd.notna(prev_long) and df["close"].iloc[i] < prev_long:
-            directions[i] = -1
+            direction[i] = -1
         else:
-            directions[i] = directions[i - 1]
+            direction[i] = direction[i - 1]
 
-    df["direction"] = directions
-
+    df["direction"] = direction
     previous_direction = df["direction"].shift(1)
 
     df["buy_signal"] = (
@@ -150,46 +124,31 @@ def main():
     print("Zaman:", INTERVAL)
     print("Strateji: Chandelier Exit 22 / 3")
     print("Mod: Sinyal testi - Emir yok")
+
+    df = get_candles()
+
+    # Açık olan son mumu çıkar.
+    closed_df = df.iloc[:-1].copy()
+
+    if len(closed_df) < 100:
+        raise ValueError("Yeterli kapanmış mum yok")
+
+    result = calculate_ce(closed_df)
+    candle = result.iloc[-1]
+
     print("--------------------------------")
+    print("Kapanan mum:", candle["open_time"])
+    print("ETHUSDT fiyatı:", candle["close"])
 
-    last_candle = None
+    if candle["buy_signal"]:
+        print("🟢 CE BUY - LONG SİNYALİ")
+    elif candle["sell_signal"]:
+        print("🔴 CE SELL - SHORT SİNYALİ")
+    else:
+        print("Sinyal yok.")
 
-    while True:
-        try:
-            df = get_candles()
-
-            # Son mum henüz kapanmamış olabilir.
-            # Bu nedenle yalnızca kapanmış mumları kullan.
-            closed_df = df.iloc[:-1].copy()
-
-            if len(closed_df) < 100:
-                print("Yeterli mum verisi yok.")
-                time.sleep(CHECK_INTERVAL)
-                continue
-
-            result = calculate_ce(closed_df)
-
-            candle = result.iloc[-1]
-            candle_time = candle["open_time"]
-
-            if candle_time != last_candle:
-                last_candle = candle_time
-
-                print("\nKapanan mum:", candle_time)
-                print("ETHUSDT:", candle["close"])
-
-                if candle["buy_signal"]:
-                    print("🟢 CE BUY - LONG SİNYALİ")
-                elif candle["sell_signal"]:
-                    print("🔴 CE SELL - SHORT SİNYALİ")
-                else:
-                    print("Sinyal yok.")
-
-            time.sleep(CHECK_INTERVAL)
-
-        except Exception as e:
-            print("HATA:", e)
-            time.sleep(15)
+    print("--------------------------------")
+    print("TEST TAMAMLANDI - EMİR GÖNDERİLMEDİ")
 
 
 if __name__ == "__main__":
