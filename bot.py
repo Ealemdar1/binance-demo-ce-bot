@@ -1,10 +1,9 @@
 
 import requests
 import pandas as pd
-
-# ==============================
-# OKX CHANDELIER EXIT SIGNAL BOT
-# ==============================
+import json
+import subprocess
+from pathlib import Path
 
 BASE_URL = "https://www.okx.com"
 SYMBOL = "ETH-USDT"
@@ -13,6 +12,8 @@ INTERVAL = "5m"
 ATR_PERIOD = 22
 ATR_MULTIPLIER = 3.0
 USE_CLOSE = True
+
+STATE_FILE = Path("signal_state.json")
 
 
 def get_candles():
@@ -30,7 +31,7 @@ def get_candles():
     result = response.json()
 
     if result["code"] != "0":
-        raise Exception("OKX hatası: " + result["msg"])
+        raise Exception("OKX hatasi: " + result["msg"])
 
     df = pd.DataFrame(result["data"], columns=[
         "time", "open", "high", "low", "close",
@@ -46,7 +47,7 @@ def get_candles():
         utc=True
     )
 
-    # Sadece kapanmış mumları kullan
+    # Sadece kapanmis mumlar
     df = df[df["confirm"] == "1"].copy()
 
     return df.sort_values("time").reset_index(drop=True)
@@ -63,13 +64,10 @@ def calculate_ce(df):
         (df["low"] - previous_close).abs()
     ], axis=1).max(axis=1)
 
-    # Wilder ATR (Pine ta.atr mantığı)
     atr = pd.Series(float("nan"), index=df.index)
 
     if len(df) >= ATR_PERIOD:
-        atr.iloc[ATR_PERIOD - 1] = (
-            tr.iloc[:ATR_PERIOD].mean()
-        )
+        atr.iloc[ATR_PERIOD - 1] = tr.iloc[:ATR_PERIOD].mean()
 
         for i in range(ATR_PERIOD, len(df)):
             atr.iloc[i] = (
@@ -134,7 +132,6 @@ def calculate_ce(df):
                 direction[i] = direction[i - 1]
 
     df["direction"] = direction
-
     previous_direction = df["direction"].shift(1)
 
     df["buy_signal"] = (
@@ -150,8 +147,45 @@ def calculate_ce(df):
     return df
 
 
-def main():
+def load_state():
+    if not STATE_FILE.exists():
+        return {}
 
+    with open(STATE_FILE, "r", encoding="utf-8") as file:
+        return json.load(file)
+
+
+def save_state(candle_time, signal):
+    state = {
+        "last_signal_candle": candle_time,
+        "last_signal": signal
+    }
+
+    with open(STATE_FILE, "w", encoding="utf-8") as file:
+        json.dump(state, file, indent=4)
+
+    subprocess.run(
+        ["git", "config", "user.name", "github-actions[bot]"],
+        check=True
+    )
+
+    subprocess.run(
+        ["git", "config", "user.email",
+         "41898282+github-actions[bot]@users.noreply.github.com"],
+        check=True
+    )
+
+    subprocess.run(["git", "add", str(STATE_FILE)], check=True)
+
+    subprocess.run(
+        ["git", "commit", "-m", "Save last signal state"],
+        check=True
+    )
+
+    subprocess.run(["git", "push"], check=True)
+
+
+def main():
     print("================================")
     print(" OKX CHANDELIER EXIT BOT")
     print("================================")
@@ -162,30 +196,42 @@ def main():
         raise Exception("Yeterli kapanmis mum bulunamadi.")
 
     result = calculate_ce(df)
-
     candle = result.iloc[-1]
 
     print("Parite:", SYMBOL)
     print("Zaman dilimi:", INTERVAL)
     print("Mum zamani:", candle["time"])
     print("Fiyat:", candle["close"])
-    print("ATR:", round(candle["close"] * 0 + 1, 2)
-          if pd.isna(candle["close"]) else "Hesaplandi")
+
+    signal = None
 
     if candle["buy_signal"]:
-        print("")
-        print("******** LONG SINYALI ********")
-
+        signal = "LONG"
     elif candle["sell_signal"]:
-        print("")
-        print("******** SHORT SINYALI ********")
+        signal = "SHORT"
 
-    else:
+    if signal is None:
         print("Sinyal yok.")
+        return
 
+    candle_time = candle["time"].isoformat()
+    state = load_state()
+
+    if state.get("last_signal_candle") == candle_time:
+        print("Bu mumun sinyali daha once kaydedilmis.")
+        print("Tekrar sinyal uretilmedi.")
+        return
+
+    print("")
+    print("******** YENI", signal, "SINYALI ********")
+    print("Sinyal mum zamani:", candle_time)
+
+    save_state(candle_time, signal)
+
+    print("Sinyal kaydedildi.")
+    print("Tekrar bildirilmeyecek.")
     print("--------------------------------")
     print("Emir gonderilmedi.")
-    print("Test tamamlandi.")
 
 
 if __name__ == "__main__":
