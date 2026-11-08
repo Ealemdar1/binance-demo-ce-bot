@@ -2,8 +2,13 @@
 import requests
 import pandas as pd
 import json
+import os
 import subprocess
 from pathlib import Path
+
+# ==================================
+# OKX CHANDELIER EXIT TELEGRAM BOT
+# ==================================
 
 BASE_URL = "https://www.okx.com"
 SYMBOL = "ETH-USDT"
@@ -47,7 +52,7 @@ def get_candles():
         utc=True
     )
 
-    # Sadece kapanmis mumlar
+    # Yalnizca kapanmis mumlar
     df = df[df["confirm"] == "1"].copy()
 
     return df.sort_values("time").reset_index(drop=True)
@@ -67,7 +72,9 @@ def calculate_ce(df):
     atr = pd.Series(float("nan"), index=df.index)
 
     if len(df) >= ATR_PERIOD:
-        atr.iloc[ATR_PERIOD - 1] = tr.iloc[:ATR_PERIOD].mean()
+        atr.iloc[ATR_PERIOD - 1] = (
+            tr.iloc[:ATR_PERIOD].mean()
+        )
 
         for i in range(ATR_PERIOD, len(df)):
             atr.iloc[i] = (
@@ -132,6 +139,7 @@ def calculate_ce(df):
                 direction[i] = direction[i - 1]
 
     df["direction"] = direction
+
     previous_direction = df["direction"].shift(1)
 
     df["buy_signal"] = (
@@ -155,6 +163,44 @@ def load_state():
         return json.load(file)
 
 
+def send_telegram(signal, candle):
+    token = os.getenv("TELEGRAM_BOT_TOKEN")
+    chat_id = os.getenv("TELEGRAM_CHAT_ID")
+
+    if not token or not chat_id:
+        raise Exception("Telegram bilgileri bulunamadi!")
+
+    message = (
+        "🚨 OKX CHANDELIER EXIT 🚨\n\n"
+        f"Parite: {SYMBOL}\n"
+        f"Sinyal: {signal}\n"
+        f"Zaman dilimi: {INTERVAL}\n"
+        f"Fiyat: {candle['close']}\n"
+        f"Mum zamani: {candle['time']}\n\n"
+        "Bu bir sinyaldir. Emir gonderilmedi."
+    )
+
+    url = f"https://api.telegram.org/bot{token}/sendMessage"
+
+    response = requests.post(
+        url,
+        data={
+            "chat_id": chat_id,
+            "text": message
+        },
+        timeout=20
+    )
+
+    response.raise_for_status()
+
+    result = response.json()
+
+    if not result.get("ok"):
+        raise Exception("Telegram mesaj gonderilemedi!")
+
+    print("Telegram bildirimi gonderildi.")
+
+
 def save_state(candle_time, signal):
     state = {
         "last_signal_candle": candle_time,
@@ -170,19 +216,27 @@ def save_state(candle_time, signal):
     )
 
     subprocess.run(
-        ["git", "config", "user.email",
-         "41898282+github-actions[bot]@users.noreply.github.com"],
+        [
+            "git", "config", "user.email",
+            "41898282+github-actions[bot]@users.noreply.github.com"
+        ],
         check=True
     )
 
-    subprocess.run(["git", "add", str(STATE_FILE)], check=True)
+    subprocess.run(
+        ["git", "add", str(STATE_FILE)],
+        check=True
+    )
 
     subprocess.run(
         ["git", "commit", "-m", "Save last signal state"],
         check=True
     )
 
-    subprocess.run(["git", "push"], check=True)
+    subprocess.run(
+        ["git", "push"],
+        check=True
+    )
 
 
 def main():
@@ -215,22 +269,24 @@ def main():
         return
 
     candle_time = candle["time"].isoformat()
+
     state = load_state()
 
     if state.get("last_signal_candle") == candle_time:
         print("Bu mumun sinyali daha once kaydedilmis.")
-        print("Tekrar sinyal uretilmedi.")
+        print("Tekrar bildirim gonderilmeyecek.")
         return
 
-    print("")
-    print("******** YENI", signal, "SINYALI ********")
-    print("Sinyal mum zamani:", candle_time)
+    print("YENI SINYAL:", signal)
 
+    # Once Telegram'a bildir
+    send_telegram(signal, candle)
+
+    # Ardindan sinyal zamanini kaydet
     save_state(candle_time, signal)
 
     print("Sinyal kaydedildi.")
-    print("Tekrar bildirilmeyecek.")
-    print("--------------------------------")
+    print("Telegram bildirimi gonderildi.")
     print("Emir gonderilmedi.")
 
 
