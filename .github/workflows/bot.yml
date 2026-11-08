@@ -30,6 +30,13 @@ jobs:
       - name: Kutuphaneleri yukle
         run: pip install -r requirements.txt
 
+      - name: Telegram baglanti testi
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: |
+          python -c "import os,requests; t=os.environ['TELEGRAM_BOT_TOKEN']; c=os.environ['TELEGRAM_CHAT_ID']; r=requests.post('https://api.telegram.org/bot'+t+'/sendMessage',data={'chat_id':c,'text':'OKX bot Telegram baglantisi basarili!'},timeout=20); print(r.text); r.raise_for_status()"
+
       - name: OKX Telegram sinyal botu
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
