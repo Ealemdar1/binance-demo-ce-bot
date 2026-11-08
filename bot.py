@@ -2,7 +2,7 @@
 import requests
 import pandas as pd
 
-BASE_URL = "https://demo-fapi.binance.com"
+BASE_URL = "https://fapi.binance.com"
 SYMBOL = "ETHUSDT"
 INTERVAL = "5m"
 ATR_PERIOD = 22
