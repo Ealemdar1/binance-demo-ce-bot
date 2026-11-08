@@ -2,36 +2,48 @@
 import requests
 import pandas as pd
 
-BASE_URL = "https://fapi.binance.com"
-SYMBOL = "ETHUSDT"
+BASE_URL = "https://www.okx.com"
+SYMBOL = "ETH-USDT"
 INTERVAL = "5m"
 ATR_PERIOD = 22
 ATR_MULTIPLIER = 3.0
-CANDLE_LIMIT = 500
 
 def get_candles():
-    url = f"{BASE_URL}/fapi/v1/klines"
+    url = BASE_URL + "/api/v5/market/candles"
+
     params = {
-        "symbol": SYMBOL,
-        "interval": INTERVAL,
-        "limit": CANDLE_LIMIT
+        "instId": SYMBOL,
+        "bar": INTERVAL,
+        "limit": "300"
     }
 
     response = requests.get(url, params=params, timeout=20)
     response.raise_for_status()
 
-    columns = [
-        "open_time", "open", "high", "low", "close",
-        "volume", "close_time", "quote_volume",
-        "trades", "taker_buy_base", "taker_buy_quote", "ignore"
-    ]
+    result = response.json()
 
-    df = pd.DataFrame(response.json(), columns=columns)
+    if result["code"] != "0":
+        raise Exception(result["msg"])
+
+    rows = result["data"]
+
+    df = pd.DataFrame(rows, columns=[
+        "time", "open", "high", "low", "close",
+        "volume", "vol_ccy", "vol_quote", "confirm"
+    ])
 
     for col in ["open", "high", "low", "close"]:
         df[col] = df[col].astype(float)
 
-    df["open_time"] = pd.to_datetime(df["open_time"], unit="ms")
+    df["time"] = pd.to_datetime(
+        df["time"].astype("int64"), unit="ms"
+    )
+
+    # Yalnızca kapanmış mumlar
+    df = df[df["confirm"] == "1"].copy()
+
+    df = df.sort_values("time").reset_index(drop=True)
+
     return df
 
 
@@ -46,18 +58,15 @@ def calculate_ce(df):
         (df["low"] - prev_close).abs()
     ], axis=1).max(axis=1)
 
-    # Wilder ATR (Pine Script ta.atr)
     atr = pd.Series(float("nan"), index=df.index)
-
-    if len(df) <= ATR_PERIOD:
-        raise ValueError("Yetersiz mum verisi")
 
     seed = tr.iloc[1:ATR_PERIOD + 1].mean()
     atr.iloc[ATR_PERIOD] = seed
 
     for i in range(ATR_PERIOD + 1, len(df)):
         atr.iloc[i] = (
-            atr.iloc[i - 1] * (ATR_PERIOD - 1) + tr.iloc[i]
+            atr.iloc[i - 1] * (ATR_PERIOD - 1)
+            + tr.iloc[i]
         ) / ATR_PERIOD
 
     atr = atr * ATR_MULTIPLIER
@@ -101,16 +110,15 @@ def calculate_ce(df):
             direction[i] = direction[i - 1]
 
     df["direction"] = direction
-    previous_direction = df["direction"].shift(1)
+
+    previous = df["direction"].shift(1)
 
     df["buy_signal"] = (
-        (df["direction"] == 1) &
-        (previous_direction == -1)
+        (df["direction"] == 1) & (previous == -1)
     )
 
     df["sell_signal"] = (
-        (df["direction"] == -1) &
-        (previous_direction == 1)
+        (df["direction"] == -1) & (previous == 1)
     )
 
     return df
@@ -118,37 +126,32 @@ def calculate_ce(df):
 
 def main():
     print("================================")
-    print(" BINANCE FUTURES DEMO CE BOT")
+    print(" OKX DATA - CHANDELIER EXIT BOT")
     print("================================")
-    print("Parite:", SYMBOL)
-    print("Zaman:", INTERVAL)
-    print("Strateji: Chandelier Exit 22 / 3")
-    print("Mod: Sinyal testi - Emir yok")
 
     df = get_candles()
 
-    # Açık olan son mumu çıkar.
-    closed_df = df.iloc[:-1].copy()
+    if len(df) < 100:
+        raise Exception("Yeterli kapanmış mum yok")
 
-    if len(closed_df) < 100:
-        raise ValueError("Yeterli kapanmış mum yok")
-
-    result = calculate_ce(closed_df)
+    result = calculate_ce(df)
     candle = result.iloc[-1]
 
-    print("--------------------------------")
-    print("Kapanan mum:", candle["open_time"])
-    print("ETHUSDT fiyatı:", candle["close"])
+    print("Parite:", SYMBOL)
+    print("Zaman dilimi:", INTERVAL)
+    print("Mum zamanı:", candle["time"])
+    print("Fiyat:", candle["close"])
 
     if candle["buy_signal"]:
-        print("🟢 CE BUY - LONG SİNYALİ")
+        print("🟢 CE BUY - LONG")
     elif candle["sell_signal"]:
-        print("🔴 CE SELL - SHORT SİNYALİ")
+        print("🔴 CE SELL - SHORT")
     else:
         print("Sinyal yok.")
 
     print("--------------------------------")
-    print("TEST TAMAMLANDI - EMİR GÖNDERİLMEDİ")
+    print("TEST TAMAMLANDI")
+    print("EMİR GÖNDERİLMEDİ")
 
 
 if __name__ == "__main__":
